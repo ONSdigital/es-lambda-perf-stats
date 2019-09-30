@@ -104,7 +104,7 @@ function pauseForXRay(){
 function gatherStatsFromXRay(){
     displayHeader "Started Gathering Stats"
     echo "trace-id, timestamp, Total Time, Init, Invocation, Overhead" > "${LAMBDA_INVOCATION_STATS}"
-    (aws xray get-trace-summaries --start-time $((CONST_START_TIMESTAMP)) --end-time $((CONST_START_TIMESTAMP+900)) --query 'TraceSummaries[*].Id' --output json | jq -r ".[]" | xargs -I % "${CONST_SCRIPT_PATH}/gather-stats-for-one-xray-trace.sh" % | sort) >> "${LAMBDA_INVOCATION_STATS}"
+    (aws xray get-trace-summaries --region "${ARG_AWS_REGION}" --start-time $((CONST_START_TIMESTAMP)) --end-time $((CONST_START_TIMESTAMP+900)) --query 'TraceSummaries[*].Id' --output json | jq -r ".[]" | xargs -I % "${CONST_SCRIPT_PATH}/gather-stats-for-one-xray-trace.sh" % | sort) >> "${LAMBDA_INVOCATION_STATS}"
     displayInfo "Finished Gathering Stats"
     displayInfo "File Created: ${LAMBDA_INVOCATION_STATS} "
 }
@@ -125,11 +125,11 @@ function displayCSV(){
       displayErr "csvlook is not on the path. Not using it to display CSV"
     fi
 
-    if [ -x "$(command -v tty-table)" ]; then
-      tty-table < "${LAMBDA_INVOCATION_STATS}"
-    else
-      displayErr "tty-table is not on the path. Not using it to display CSV"
-    fi
+    # if [ -x "$(command -v tty-table)" ]; then
+      # tty-table < "${LAMBDA_INVOCATION_STATS}"
+    # else
+      # displayErr "tty-table is not on the path. Not using it to display CSV"
+    # fi
 }
 
 function main(){
