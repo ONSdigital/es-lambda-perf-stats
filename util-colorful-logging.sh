@@ -8,7 +8,7 @@ function defineColours(){
     export reset="\e[0m"
 }
 
-function displayErr(){ printf "\n$err %s $reset\n\n" "$*"; }
-function displayInfo(){ printf "\n$info %s $reset\n" "$*";}
-function displayHeader(){  printf "\n\n$header ---------------------- %s ------------- $reset\n" "$*" ;}
-function highlight(){  printf "$highlight \t %s $reset\n" "$*" ;}
+function displayErr(){ printf "\n$err %b $reset\n\n" "$*"; }
+function displayInfo(){ printf "\n$info %b $reset\n" "$*";}
+function displayHeader(){  printf "\n\n$header ---------------------- %b ------------- $reset\n" "$*" ;}
+function highlight(){  printf "$highlight \t %b $reset\n" "$*" ;}
