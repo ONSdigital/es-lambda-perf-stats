@@ -1,6 +1,8 @@
 #!/bin/bash
 
-export TRACE_ID="$1"
+export TRACE_ID="${1:-"${TRACE_ID}"}"
+# printf "Getting details for Xray Trace: %s, region: %s \n" "${TRACE_ID}" "${ARG_AWS_REGION}"
+# set | grep -i AWS_
 
 (printf "$TRACE_ID, "; \
     aws xray batch-get-traces --region "$ARG_AWS_REGION" --trace-ids "${TRACE_ID}"  --output json --query "Traces[*].Segments[*].Document" \

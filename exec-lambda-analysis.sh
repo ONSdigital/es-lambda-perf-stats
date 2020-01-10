@@ -18,11 +18,12 @@ source "${CONST_SCRIPT_PATH}/util-functions.sh"
 
 ARG_FUNCTION_NAME=
 ARG_LAMBDA_MEMORY="256"
-ARG_INVOKE_COUNT="5"
+ARG_INVOKE_COUNT="8"
 ARG_AWS_REGION="eu-west-2"
-ARG_XRAY_PAUSE_TIME=5
+ARG_XRAY_PAUSE_TIME=10
 
 CONST_START_TIMESTAMP=""
+CONST_END_TIMESTAMP=""
 
 function parseArgs(){
     options=':f:m:i:r:h'
@@ -34,6 +35,7 @@ function parseArgs(){
                 ;;
             m) # OPTIONAL. Specify Memory to update the Lambda to. **Defaults to 256m**
                 ARG_LAMBDA_MEMORY=${OPTARG}
+
                 ;;
             i) # OPTIONAL. Specify Number of invocations to be done. **Defaults to 5**
                 ARG_INVOKE_COUNT=${OPTARG}
@@ -62,6 +64,20 @@ function parseArgs(){
     echo "Setting ARG_LAMBDA_MEMORY to $ARG_LAMBDA_MEMORY"
     echo "Setting ARG_INVOKE_COUNT to $ARG_INVOKE_COUNT"
     echo "Setting ARG_XRAY_PAUSE_TIME to $ARG_XRAY_PAUSE_TIME"
+
+    IFS=',' read -r -a mem_array <<< "$ARG_LAMBDA_MEMORY"
+    # for element in "${mem_array[@]}"
+    # do
+        # echo "Mem: $element"
+    # done
+    mem_array_length="${#mem_array[*]}"
+    printf "mem_array_length : %s\n" "$mem_array_length"
+
+    # for i in $(seq 0 $(( ARG_INVOKE_COUNT - 1 )) ); do
+        # chosen_mem_array_index=$(( i % mem_array_length))
+        # printf "chosen_mem_array_index : %s\n" "${chosen_mem_array_index}"
+        # echo "Invocation $i will use mem_array[${chosen_mem_array_index}] with value ${mem_array[${chosen_mem_array_index}]}" 
+    # done
 }
 ######################## END: Arg Parsing ####################################
 
@@ -74,7 +90,7 @@ function init(){
     defineColours
     parseArgs "$@"
 
-    CONST_START_TIMESTAMP=$(date +%s)
+    CONST_START_TIMESTAMP="$(date +%s)"
     CONST_START_TIMESTAMP_FORMATTED="$(gdate -d "@${CONST_START_TIMESTAMP}" "+%Y-%m-%d_%H.%M.%S")"
     FILE_SUFFIX="${ARG_FUNCTION_NAME}_${ARG_LAMBDA_MEMORY}_${CONST_START_TIMESTAMP_FORMATTED}"
     OUTPUT_DIR="${CONST_SCRIPT_PATH}/output/${FILE_SUFFIX}"
@@ -85,15 +101,32 @@ function init(){
 }
 
 function updateLambda(){
-    displayHeader "Updating $ARG_FUNCTION_NAME mem to $ARG_LAMBDA_MEMORY"
-    aws lambda  update-function-configuration --region "${ARG_AWS_REGION}" --memory-size "${ARG_LAMBDA_MEMORY}" --function-name  "${ARG_FUNCTION_NAME}" --output table
-    displayInfo "Finished updating lambda"
+    local __local_function_name="${1}"
+    local __local_function_mem="${2}"
+
+    displayHeader "Updating $__local_function_name mem to $__local_function_mem"
+    aws lambda  update-function-configuration --region "${ARG_AWS_REGION}" --memory-size "${__local_function_mem}" --function-name  "${__local_function_name}" --output text 1>/dev/null
+    # displayHeader "Finished updating $__local_function_name mem to $__local_function_mem"
 }
 
 function invokeLambda(){
     displayHeader "Invoking $ARG_FUNCTION_NAME $ARG_INVOKE_COUNT times\n"
-    for i in $(seq 1 "${ARG_INVOKE_COUNT}"); do printf "(%s) -->" "${i}";  aws lambda invoke --region "${ARG_AWS_REGION}" --function-name "${ARG_FUNCTION_NAME}" "${OUTPUT_DIR}/${i}_out_${FILE_SUFFIX}.txt" ;   done
-    displayInfo "Finished...."
+
+    CONST_START_TIMESTAMP="$(( $(date +%s)-1 ))"
+    for i in $(seq 0 $(( ARG_INVOKE_COUNT - 1 )) ); do
+        chosen_mem_array_index=$(( i % mem_array_length))
+        chosen_mem="${mem_array[${chosen_mem_array_index}]}"
+        # printf "chosen_mem_array_index : %s\n" "${chosen_mem_array_index}"
+
+        echo "Invocation $i will use mem_array[${chosen_mem_array_index}] with value ${chosen_mem} " 
+        updateLambda "${ARG_FUNCTION_NAME}" "${chosen_mem}"
+
+        printf "(%s) -->" "${i}";  aws lambda invoke --region "${ARG_AWS_REGION}" --function-name "${ARG_FUNCTION_NAME}" "${OUTPUT_DIR}/${i}_out_${FILE_SUFFIX}.txt" ;
+        displayInfo "Finished invocation num $i ..."
+    done
+
+    CONST_END_TIMESTAMP="$(date +%s)"
+    displayInfo "Finished all ${ARG_INVOKE_COUNT} invocations....at ${CONST_END_TIMESTAMP}"
 }
 
 function pauseForXRay(){
@@ -101,10 +134,37 @@ function pauseForXRay(){
     sleep "${ARG_XRAY_PAUSE_TIME}"
 }
 
+function execute_trace_summary(){
+    echo "Executing xray on $(gdate) " >&2 
+    echo aws xray get-trace-summaries --region "${ARG_AWS_REGION}" --start-time "$CONST_START_TIMESTAMP" --end-time "$CONST_END_TIMESTAMP" --query 'TraceSummaries[*].Id' --output json  >&2
+
+    aws xray get-trace-summaries --region "${ARG_AWS_REGION}" --start-time "$CONST_START_TIMESTAMP" --end-time "$CONST_END_TIMESTAMP"  --query 'TraceSummaries[*].Id' --output json 
+}
+
 function gatherStatsFromXRay(){
-    displayHeader "Started Gathering Stats"
+    displayHeader "Waiting for all stats to be present in X-Ray"
+
+    local TRACE_SUMMARY_OUTPUT=""
+    local TRACE_IDS=""
+    local TRACE_IDS_COUNT=0
+
+    while [[  TRACE_IDS_COUNT -lt ARG_INVOKE_COUNT  ]] ; do 
+        # aws logs get-query-results --query-id "${AWS_LOG_QUERY_ID}" --output json | jq -r ".status" | grep -q -i "complete" && break || echo "Waiting for ${AWS_LOG_QUERY_ID} to finish"
+        TRACE_SUMMARY_OUTPUT="$(execute_trace_summary)"
+
+        TRACE_IDS="$(echo "${TRACE_SUMMARY_OUTPUT}"| jq -r ".[]" )"
+        TRACE_IDS_COUNT="$(echo "${TRACE_SUMMARY_OUTPUT}"| jq -r ".| length" )"
+        displayInfo "Getting details for traces:\n ${TRACE_IDS}"
+        echo "Waiting for X-Ray. Expected length : ${ARG_INVOKE_COUNT}, Current length is : ${TRACE_IDS_COUNT}"
+
+        sleep 1
+    done
+
+    displayInfo "Getting details for traces:\n ${TRACE_IDS}"
+
     echo "trace-id, timestamp, Total Time, Init, Invocation, Overhead" > "${LAMBDA_INVOCATION_STATS}"
-    (aws xray get-trace-summaries --region "${ARG_AWS_REGION}" --start-time $((CONST_START_TIMESTAMP)) --end-time $((CONST_START_TIMESTAMP+900)) --query 'TraceSummaries[*].Id' --output json | jq -r ".[]" | xargs -I % "${CONST_SCRIPT_PATH}/gather-stats-for-one-xray-trace.sh" % | sort) >> "${LAMBDA_INVOCATION_STATS}"
+    printf "%s" "$(export ARG_AWS_REGION && echo "${TRACE_IDS}" | xargs -I % "${CONST_SCRIPT_PATH}/gather-stats-for-one-xray-trace.sh" % | sort)" | tee -a "${LAMBDA_INVOCATION_STATS}"
+
     displayInfo "Finished Gathering Stats"
     displayInfo "File Created: ${LAMBDA_INVOCATION_STATS} "
 }
@@ -134,9 +194,7 @@ function displayCSV(){
 
 function main(){
     init "$@"
-    updateLambda
     invokeLambda
-    pauseForXRay
     gatherStatsFromXRay
     processCSV
     displayCSV
